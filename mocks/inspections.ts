@@ -22,6 +22,9 @@ export interface Inspection {
   synced: boolean;
   photoUri?: string; // URI foto lokal permanen (documents dir), kosong untuk data seed
   cloudPhotoUrl?: string; // URL foto di cloud storage setelah upload berhasil
+  namaOperator?: string;
+  namaKebun?: string;
+  nomorPohon?: string;
 }
 
 /**

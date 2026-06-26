@@ -13,7 +13,12 @@ import { Inspection } from "@/mocks/inspections";
 export default function PetaScreen() {
   const inspections = useInspectionStore((s) => s.inspections);
   const selectInspection = useInspectionStore((s) => s.selectInspection);
-  const stats = useInspectionStore((s) => s.getStats());
+  const stats = {
+    total: inspections.length,
+    kritis: inspections.filter((i) => i.status === "kritis").length,
+    sedang: inspections.filter((i) => i.status === "sedang").length,
+    sehat:  inspections.filter((i) => i.status === "sehat").length,
+  };
 
   const [mapFilter, setMapFilter] = useState<"semua" | "kritis" | "7hari">("semua");
   const [selectedMarker, setSelectedMarker] = useState<Inspection | null>(

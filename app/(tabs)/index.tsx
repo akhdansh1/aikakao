@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useEffect } from "react";
 import { View, Text, StyleSheet, ScrollView, Pressable } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { router } from "expo-router";
@@ -9,19 +9,47 @@ import { InspectionListItem } from "@/components/InspectionListItem";
 import { SyncStatusBanner } from "@/components/SyncStatusBanner";
 import { OfflineModeToggle } from "@/components/OfflineModeToggle";
 import { DashboardHeader } from "@/components/DashboardHeader";
+import { FormKebunSheet } from "@/components/FormKebunSheet";
 import { useInspectionStore } from "@/store/useInspectionStore";
+import { useFormKebunStore } from "@/store/useFormKebunStore";
 import { useNowTick } from "@/utils/useNowTick";
+import { Inspection } from "@/mocks/inspections";
 
 export default function DashboardScreen() {
   useNowTick(30_000);
+
   const inspections = useInspectionStore((s) => s.inspections);
-  const stats = useInspectionStore((s) => s.getStats());
   const selectInspection = useInspectionStore((s) => s.selectInspection);
   const recent = inspections.slice(0, 3);
+  const stats = {
+    total: inspections.length,
+    kritis: inspections.filter((i) => i.status === "kritis").length,
+    sedang: inspections.filter((i) => i.status === "sedang").length,
+    sehat: inspections.filter((i) => i.status === "sehat").length,
+  };
+
+  const { hydrate, showSheet } = useFormKebunStore();
+
+  useEffect(() => {
+    hydrate();
+  }, []);
+
+  const handleConfirm = () => {
+    router.push("/(tabs)/kamera");
+  };
+
+  const handleItemPress = (item: Inspection) => {
+    selectInspection(item);
+    router.push("/scan/result");
+  };
 
   return (
     <SafeAreaView style={s.safe} edges={["top"]}>
-      <ScrollView style={s.scroll} contentContainerStyle={s.content} showsVerticalScrollIndicator={false}>
+      <ScrollView
+        style={s.scroll}
+        contentContainerStyle={s.content}
+        showsVerticalScrollIndicator={false}
+      >
         <DashboardHeader operatorName="Operator" />
 
         {/* Stat cards */}
@@ -56,23 +84,31 @@ export default function DashboardScreen() {
                 <InspectionListItem
                   key={item.id}
                   inspection={item}
-                  onPress={() => { selectInspection(item); router.push("/scan/result"); }}
+                  onPress={() => handleItemPress(item)}
                 />
               ))}
             </View>
           )}
         </View>
 
-        <Pressable style={s.btn} onPress={() => router.push("/(tabs)/kamera")}>
+        {/* Tombol scan — trigger bottom sheet form kebun */}
+        <Pressable style={s.btn} onPress={showSheet}>
           <Ionicons name="camera" size={18} color={Colors.white} />
           <Text style={s.btnText}>MULAI SCAN TANAMAN</Text>
         </Pressable>
       </ScrollView>
+
+      {/* Bottom sheet form kebun */}
+      <FormKebunSheet onConfirm={handleConfirm} />
     </SafeAreaView>
   );
 }
 
-function StatCard({ value, label, color }: { value: number; label: string; color: string }) {
+function StatCard({
+  value, label, color,
+}: {
+  value: number; label: string; color: string;
+}) {
   return (
     <View style={s.statCard}>
       <Text style={[s.statVal, { color }]}>{value}</Text>
@@ -97,11 +133,17 @@ const s = StyleSheet.create({
   statVal: { fontSize: FontSize.xxl, fontWeight: "700" },
   statLabel: { fontSize: FontSize.xs, color: Colors.gray600, marginTop: 2, textAlign: "center" },
   section: { paddingHorizontal: Spacing.xl, marginTop: Spacing.lg },
-  sectionHeader: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: Spacing.sm },
+  sectionHeader: {
+    flexDirection: "row", justifyContent: "space-between",
+    alignItems: "center", marginBottom: Spacing.sm,
+  },
   sectionTitle: { fontSize: FontSize.md, fontWeight: "700", color: Colors.gray900 },
   seeAll: { fontSize: FontSize.sm, color: Colors.greenMain, fontWeight: "500" },
   listCard: { backgroundColor: Colors.white, borderRadius: Radius.md, overflow: "hidden" },
-  emptyCard: { backgroundColor: Colors.white, borderRadius: Radius.md, padding: Spacing.xxl, alignItems: "center", gap: Spacing.sm },
+  emptyCard: {
+    backgroundColor: Colors.white, borderRadius: Radius.md,
+    padding: Spacing.xxl, alignItems: "center", gap: Spacing.sm,
+  },
   emptyTitle: { fontSize: FontSize.md, fontWeight: "600", color: Colors.gray700 },
   emptySub: { fontSize: FontSize.sm, color: Colors.gray500, textAlign: "center" },
   btn: {

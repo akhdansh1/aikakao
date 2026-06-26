@@ -11,7 +11,9 @@ import { FontSize, Radius, Spacing } from "@/constants/Theme";
 import { useScanStore } from "@/store/useScanStore";
 import { useInspectionStore } from "@/store/useInspectionStore";
 import { useSyncQueueStore } from "@/store/useSyncQueueStore";
+import { useFormKebunStore } from "@/store/useFormKebunStore";
 import { SyncStatusBanner } from "@/components/SyncStatusBanner";
+import { FormKebunSheet } from "@/components/FormKebunSheet";
 import { Inspection, OrganType, DISEASE_OPTIONS } from "@/mocks/inspections";
 import { formatRelativeTimestamp } from "@/utils/time";
 import { savePhotoLocally, uploadPhotoToCloud } from "@/utils/photoStorage";
@@ -38,7 +40,23 @@ export default function KameraScreen() {
   const isConnected = useSyncQueueStore((s) => s.isConnected);
   const enqueueSync = useSyncQueueStore((s) => s.enqueue);
 
-  // Minta izin lokasi saat layar kamera dibuka
+  const { form, hydrate, showSheet, updateForm } = useFormKebunStore();
+
+  // Sync organ target dari form ke scan store
+  useEffect(() => {
+    hydrate().then(() => {
+      const { form: f } = useFormKebunStore.getState();
+      setSelectedOrgan(f.organTarget);
+      // Tampilkan sheet otomatis saat kamera dibuka
+      showSheet();
+    });
+  }, []);
+
+  // Sinkronisasi organ target saat form berubah
+  useEffect(() => {
+    setSelectedOrgan(form.organTarget);
+  }, [form.organTarget]);
+
   useEffect(() => {
     Location.requestForegroundPermissionsAsync()
       .then(({ status }) => setLocGranted(status === "granted"))
@@ -52,7 +70,9 @@ export default function KameraScreen() {
       <SafeAreaView style={s.permWrap} edges={["top", "bottom"]}>
         <Ionicons name="camera-outline" size={56} color={Colors.gray400} />
         <Text style={s.permTitle}>Izin Kamera Diperlukan</Text>
-        <Text style={s.permText}>AI Kakao memerlukan akses kamera untuk memindai kondisi tanaman.</Text>
+        <Text style={s.permText}>
+          AI Kakao memerlukan akses kamera untuk memindai kondisi tanaman.
+        </Text>
         <Pressable style={s.permBtn} onPress={requestCamPermission}>
           <Text style={s.permBtnText}>Berikan Izin Kamera</Text>
         </Pressable>
@@ -66,36 +86,32 @@ export default function KameraScreen() {
     setIsAnalyzing(true);
 
     try {
-      // 1. Ambil foto
       const photo = await cameraRef.current?.takePictureAsync({ quality: 0.75 });
       if (!photo?.uri) throw new Error("Foto tidak berhasil diambil");
 
-      // 2. Ambil koordinat GPS
       let lat = -2.1547 + (Math.random() - 0.5) * 0.01;
       let lng = 117.3821 + (Math.random() - 0.5) * 0.01;
       if (locGranted) {
         try {
-          const pos = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Low });
+          const pos = await Location.getCurrentPositionAsync({
+            accuracy: Location.Accuracy.Low,
+          });
           lat = pos.coords.latitude;
           lng = pos.coords.longitude;
         } catch {}
       }
 
-      // 3. Simpan foto ke lokal permanen
       const inspId = `insp-${Date.now()}`;
       const localUri = await savePhotoLocally(photo.uri, inspId);
+      const result = buildResult(selectedOrgan, isConnected, localUri, inspId, lat, lng, form);
 
-      // 4. Build hasil inspeksi
-      const result = buildResult(selectedOrgan, isConnected, localUri, inspId, lat, lng);
-
-      // 5. Online: upload cloud di background; Offline: masuk sync queue
       if (isConnected) {
-        uploadPhotoToCloud(localUri, inspId).catch(() => {});
+        const cloudUrl = await uploadPhotoToCloud(localUri, inspId);
+        if (cloudUrl) result.cloudPhotoUrl = cloudUrl;
       } else {
         await enqueueSync(result);
       }
 
-      // 6. Simpan ke store & navigasi
       await addInspection(result);
       selectInspection(result);
       setIsAnalyzing(false);
@@ -110,6 +126,19 @@ export default function KameraScreen() {
     <View style={s.container}>
       <CameraView ref={cameraRef} style={s.camera} facing={facing}>
         <SafeAreaView style={s.overlay} edges={["top"]}>
+          {/* Info kebun di atas viewfinder */}
+          {form.namaKebun ? (
+            <View style={s.infoBar}>
+              <Ionicons name="leaf" size={12} color={Colors.white} />
+              <Text style={s.infoText}>
+                {form.namaKebun} · Blok {form.blok} · Pohon #{form.nomorPohon}
+              </Text>
+              <Pressable onPress={showSheet}>
+                <Ionicons name="pencil" size={12} color="rgba(255,255,255,0.7)" />
+              </Pressable>
+            </View>
+          ) : null}
+
           <View style={s.statusRow}>
             <View style={s.goodBadge}>
               <View style={s.goodDot} />
@@ -122,6 +151,7 @@ export default function KameraScreen() {
               </View>
             )}
           </View>
+
           <View style={s.framingWrap}>
             <View style={s.framingBox}>
               <View style={[s.corner, s.tl]} />
@@ -141,7 +171,10 @@ export default function KameraScreen() {
           {ORGANS.map((o) => (
             <Pressable
               key={o.key}
-              onPress={() => setSelectedOrgan(o.key)}
+              onPress={() => {
+                setSelectedOrgan(o.key);
+                updateForm({ organTarget: o.key });
+              }}
               style={[s.organBtn, selectedOrgan === o.key && s.organBtnActive]}
             >
               <Text style={[s.organBtnText, selectedOrgan === o.key && s.organBtnTextActive]}>
@@ -165,6 +198,9 @@ export default function KameraScreen() {
         </Pressable>
         {isAnalyzing && <Text style={s.analyzing}>Menganalisis citra...</Text>}
       </SafeAreaView>
+
+      {/* Bottom sheet form kebun */}
+      <FormKebunSheet onConfirm={() => {}} />
     </View>
   );
 }
@@ -175,22 +211,30 @@ function buildResult(
   photoUri: string,
   id: string,
   lat: number,
-  lng: number
+  lng: number,
+  form: { namaOperator: string; namaKebun: string; blok: string; nomorPohon: string }
 ): Inspection {
   const now = new Date();
   const isHealthy = Math.random() > 0.45;
-  const blockId = `BLK-${["A","B","C","D"][Math.floor(Math.random()*4)]}${Math.floor(Math.random()*9)}-${String(Math.floor(Math.random()*99)).padStart(3,"0")}`;
+  const blockId = `BLK-${form.blok}-${form.nomorPohon.padStart(3, "0")}`;
+
+  const base = {
+    id, blockId,
+    organ, latitude: lat, longitude: lng, block: "A" as const,
+    synced: isConnected, photoUri,
+    timestamp: formatRelativeTimestamp(now), date: now.toISOString(),
+    namaOperator: form.namaOperator,
+    namaKebun: form.namaKebun,
+    nomorPohon: form.nomorPohon,
+  };
 
   if (isHealthy) {
     return {
-      id, blockId,
+      ...base,
       disease: null, scientificName: null,
       confidence: +(92 + Math.random() * 7).toFixed(1),
-      organ, status: "sehat", severity: null,
+      status: "sehat", severity: null,
       recommendation: ["Tidak ada tindakan diperlukan", "Lanjutkan monitoring berkala"],
-      timestamp: formatRelativeTimestamp(now), date: now.toISOString(),
-      latitude: lat, longitude: lng, block: "A",
-      synced: isConnected, photoUri,
     };
   }
 
@@ -198,18 +242,16 @@ function buildResult(
   const disease = diseaseList[0] ?? DISEASE_OPTIONS[0];
   const conf = +(65 + Math.random() * 30).toFixed(1);
   const sev = conf > 85 ? "tinggi" : conf > 70 ? "sedang" : "rendah";
-  const status = conf > 85 ? "kritis" : "sedang";
 
   return {
-    id, blockId,
+    ...base,
     disease: disease.name, scientificName: disease.scientificName,
-    confidence: conf, organ, status, severity: sev,
+    confidence: conf,
+    status: conf > 85 ? "kritis" : "sedang",
+    severity: sev,
     recommendation: sev === "tinggi"
       ? [`Tindakan segera untuk ${disease.name}`, "Semprotkan fungisida berbasis tembaga", "Eskalasi ke agronomis"]
       : ["Pangkas bagian yang menunjukkan gejala", "Aplikasikan fungisida sistemik", "Monitoring ulang dalam 7 hari"],
-    timestamp: formatRelativeTimestamp(now), date: now.toISOString(),
-    latitude: lat, longitude: lng, block: "A",
-    synced: isConnected, photoUri,
   };
 }
 
@@ -217,32 +259,67 @@ const s = StyleSheet.create({
   container: { flex: 1, backgroundColor: Colors.black },
   camera: { flex: 1 },
   overlay: { flex: 1, alignItems: "center" },
-  statusRow: { flexDirection: "row", alignItems: "center", gap: Spacing.sm, marginTop: Spacing.lg },
-  goodBadge: { flexDirection: "row", alignItems: "center", gap: 6, backgroundColor: "rgba(76,175,80,0.9)", paddingHorizontal: Spacing.md, paddingVertical: 6, borderRadius: Radius.full },
+  infoBar: {
+    flexDirection: "row", alignItems: "center", gap: 6,
+    backgroundColor: "rgba(0,0,0,0.55)",
+    paddingHorizontal: Spacing.md, paddingVertical: 6,
+    borderRadius: Radius.full, marginTop: Spacing.md,
+  },
+  infoText: { color: Colors.white, fontSize: FontSize.xs, fontWeight: "600", flex: 1 },
+  statusRow: {
+    flexDirection: "row", alignItems: "center",
+    gap: Spacing.sm, marginTop: Spacing.sm,
+  },
+  goodBadge: {
+    flexDirection: "row", alignItems: "center", gap: 6,
+    backgroundColor: "rgba(76,175,80,0.9)",
+    paddingHorizontal: Spacing.md, paddingVertical: 6, borderRadius: Radius.full,
+  },
   goodDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: Colors.white },
   goodText: { color: Colors.white, fontSize: FontSize.sm, fontWeight: "600" },
-  offlineBadge: { flexDirection: "row", alignItems: "center", gap: 4, backgroundColor: "rgba(255,167,38,0.9)", paddingHorizontal: Spacing.sm, paddingVertical: 6, borderRadius: Radius.full },
+  offlineBadge: {
+    flexDirection: "row", alignItems: "center", gap: 4,
+    backgroundColor: "rgba(255,167,38,0.9)",
+    paddingHorizontal: Spacing.sm, paddingVertical: 6, borderRadius: Radius.full,
+  },
   offlineText: { color: Colors.white, fontSize: FontSize.xs, fontWeight: "600" },
   framingWrap: { flex: 1, alignItems: "center", justifyContent: "center" },
-  framingBox: { width: 240, height: 200, borderWidth: 1.5, borderColor: "rgba(255,255,255,0.35)", borderStyle: "dashed", borderRadius: Radius.md, alignItems: "center", justifyContent: "center" },
+  framingBox: {
+    width: 240, height: 200, borderWidth: 1.5,
+    borderColor: "rgba(255,255,255,0.35)", borderStyle: "dashed",
+    borderRadius: Radius.md, alignItems: "center", justifyContent: "center",
+  },
   framingHint: { color: "rgba(255,255,255,0.5)", fontSize: FontSize.sm, textAlign: "center" },
   corner: { position: "absolute", width: 22, height: 22, borderColor: Colors.greenAccent },
   tl: { top: -2, left: -2, borderTopWidth: 3, borderLeftWidth: 3 },
   tr: { top: -2, right: -2, borderTopWidth: 3, borderRightWidth: 3 },
   bl: { bottom: -2, left: -2, borderBottomWidth: 3, borderLeftWidth: 3 },
   br: { bottom: -2, right: -2, borderBottomWidth: 3, borderRightWidth: 3 },
-  bottom: { backgroundColor: Colors.white, paddingHorizontal: Spacing.xl, paddingTop: Spacing.md, paddingBottom: Spacing.sm },
+  bottom: {
+    backgroundColor: Colors.white,
+    paddingHorizontal: Spacing.xl, paddingTop: Spacing.md, paddingBottom: Spacing.sm,
+  },
   organLabel: { fontSize: FontSize.sm, fontWeight: "600", color: Colors.gray700, marginBottom: Spacing.sm },
   organRow: { flexDirection: "row", gap: Spacing.sm, marginBottom: Spacing.lg },
-  organBtn: { flex: 1, paddingVertical: 9, borderRadius: Radius.sm, borderWidth: 1.5, borderColor: Colors.gray300, alignItems: "center" },
+  organBtn: {
+    flex: 1, paddingVertical: 9, borderRadius: Radius.sm,
+    borderWidth: 1.5, borderColor: Colors.gray300, alignItems: "center",
+  },
   organBtnActive: { borderColor: Colors.greenMain, backgroundColor: Colors.greenLight },
   organBtnText: { fontSize: FontSize.sm, color: Colors.gray600 },
   organBtnTextActive: { color: Colors.greenMain, fontWeight: "700" },
-  shutter: { alignSelf: "center", width: 68, height: 68, borderRadius: 34, borderWidth: 3, borderColor: Colors.white, backgroundColor: Colors.greenMain, alignItems: "center", justifyContent: "center" },
+  shutter: {
+    alignSelf: "center", width: 68, height: 68, borderRadius: 34,
+    borderWidth: 3, borderColor: Colors.white,
+    backgroundColor: Colors.greenMain, alignItems: "center", justifyContent: "center",
+  },
   shutterBusy: { opacity: 0.7 },
   shutterInner: { width: "100%", height: "100%", alignItems: "center", justifyContent: "center" },
   analyzing: { textAlign: "center", marginTop: Spacing.sm, fontSize: FontSize.sm, color: Colors.gray600 },
-  permWrap: { flex: 1, alignItems: "center", justifyContent: "center", paddingHorizontal: Spacing.xxl, backgroundColor: Colors.white, gap: Spacing.sm },
+  permWrap: {
+    flex: 1, alignItems: "center", justifyContent: "center",
+    paddingHorizontal: Spacing.xxl, backgroundColor: Colors.white, gap: Spacing.sm,
+  },
   permTitle: { fontSize: FontSize.lg, fontWeight: "700", color: Colors.gray900, marginTop: Spacing.md },
   permText: { fontSize: FontSize.sm, color: Colors.gray600, textAlign: "center", marginBottom: Spacing.lg },
   permBtn: { backgroundColor: Colors.greenMain, paddingHorizontal: Spacing.xxl, paddingVertical: Spacing.md, borderRadius: Radius.md },

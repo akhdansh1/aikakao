@@ -6,7 +6,7 @@ import { Ionicons } from "@expo/vector-icons";
 import { Colors, Severity } from "@/constants/Colors";
 import { FontSize, Radius, Spacing } from "@/constants/Theme";
 import { useInspectionStore } from "@/store/useInspectionStore";
-import { formatRelativeTimestamp } from "@/utils/time";
+import { savePhotoToGallery } from "@/utils/photoStorage";
 
 const ORGAN_LABEL: Record<string, string> = {
   batang: "Batang",
@@ -31,8 +31,17 @@ export default function ResultScreen() {
   const isHealthy = inspection.status === "sehat";
   const severityConfig = inspection.severity ? Severity[inspection.severity] : null;
 
-  const handleSave = () => {
-    Alert.alert("Tersimpan", `Hasil inspeksi ${inspection.blockId} telah disimpan.`);
+  const handleSave = async () => {
+    if (!inspection.photoUri) {
+      Alert.alert("Tidak ada foto", "Tidak ada foto untuk disimpan.");
+      return;
+    }
+    const success = await savePhotoToGallery(inspection.photoUri);
+    if (success) {
+      Alert.alert("Tersimpan", "Foto berhasil disimpan ke galeri HP.");
+    } else {
+      Alert.alert("Gagal", "Pastikan izin galeri sudah diberikan di pengaturan HP.");
+    }
   };
 
   const handleShare = () => {
@@ -51,7 +60,7 @@ export default function ResultScreen() {
       </View>
 
       <ScrollView showsVerticalScrollIndicator={false}>
-        {/* Foto hasil kamera + GradCAM overlay (simulasi visual heatmap) */}
+        {/* Foto + GradCAM overlay */}
         <View style={styles.imagePreview}>
           {inspection.photoUri ? (
             <Image
@@ -78,7 +87,6 @@ export default function ResultScreen() {
               </Text>
             </>
           )}
-          {/* Overlay GradCAM tetap ditampilkan di atas foto asli untuk kasus terdeteksi sakit */}
           {inspection.photoUri && !isHealthy && (
             <>
               <View style={styles.gradcamBlobOuter} />
@@ -141,7 +149,9 @@ export default function ResultScreen() {
                         styles.pip,
                         {
                           backgroundColor:
-                            i <= severityConfig.pips ? severityConfig.color : Colors.gray200,
+                            i <= severityConfig.pips
+                              ? severityConfig.color
+                              : Colors.gray200,
                         },
                       ]}
                     />
@@ -164,23 +174,90 @@ export default function ResultScreen() {
             ))}
           </View>
 
-          {/* Metadata */}
-          <View style={styles.metaRow}>
-            <Ionicons name="location-outline" size={14} color={Colors.gray500} />
-            <Text style={styles.metaText}>
-              {inspection.latitude.toFixed(4)}, {inspection.longitude.toFixed(4)}
-            </Text>
-            <View style={styles.metaDivider} />
-            <Ionicons name="time-outline" size={14} color={Colors.gray500} />
-            <Text style={styles.metaText}>
-              {formatRelativeTimestamp(new Date(inspection.date))}
-            </Text>
+          {/* Detail Inspeksi */}
+          <Text style={styles.sectionLabel}>Detail Inspeksi</Text>
+          <View style={styles.metaCard}>
+            <View style={styles.metaItem}>
+              <Ionicons name="person-outline" size={14} color={Colors.gray500} />
+              <Text style={styles.metaLabel}>Operator</Text>
+              <Text style={styles.metaValue}>{inspection.namaOperator ?? "-"}</Text>
+            </View>
+
+            <View style={styles.metaDividerLine} />
+
+            <View style={styles.metaItem}>
+              <Ionicons name="leaf-outline" size={14} color={Colors.gray500} />
+              <Text style={styles.metaLabel}>Kebun</Text>
+              <Text style={styles.metaValue}>{inspection.namaKebun ?? "-"}</Text>
+            </View>
+
+            <View style={styles.metaDividerLine} />
+
+            <View style={styles.metaItem}>
+              <Ionicons name="grid-outline" size={14} color={Colors.gray500} />
+              <Text style={styles.metaLabel}>Blok / Pohon</Text>
+              <Text style={styles.metaValue}>{inspection.blockId}</Text>
+            </View>
+
+            <View style={styles.metaDividerLine} />
+
+            <View style={styles.metaItem}>
+              <Ionicons name="leaf-outline" size={14} color={Colors.gray500} />
+              <Text style={styles.metaLabel}>Organ</Text>
+              <Text style={styles.metaValue}>{ORGAN_LABEL[inspection.organ]}</Text>
+            </View>
+
+            <View style={styles.metaDividerLine} />
+
+            <View style={styles.metaItem}>
+              <Ionicons name="location-outline" size={14} color={Colors.gray500} />
+              <Text style={styles.metaLabel}>Koordinat GPS</Text>
+              <Text style={styles.metaValue}>
+                {inspection.latitude.toFixed(5)},{"\n"}
+                {inspection.longitude.toFixed(5)}
+              </Text>
+            </View>
+
+            <View style={styles.metaDividerLine} />
+
+            <View style={styles.metaItem}>
+              <Ionicons name="time-outline" size={14} color={Colors.gray500} />
+              <Text style={styles.metaLabel}>Waktu</Text>
+              <Text style={styles.metaValue}>
+                {new Date(inspection.date).toLocaleString("id-ID", {
+                  day: "numeric",
+                  month: "long",
+                  year: "numeric",
+                  hour: "2-digit",
+                  minute: "2-digit",
+                })}
+              </Text>
+            </View>
+
+            <View style={styles.metaDividerLine} />
+
+            <View style={styles.metaItem}>
+              <Ionicons
+                name={inspection.synced ? "cloud-done-outline" : "cloud-offline-outline"}
+                size={14}
+                color={inspection.synced ? Colors.greenMain : Colors.orange}
+              />
+              <Text style={styles.metaLabel}>Status Sync</Text>
+              <Text
+                style={[
+                  styles.metaValue,
+                  { color: inspection.synced ? Colors.greenMain : Colors.orange },
+                ]}
+              >
+                {inspection.synced ? "Tersinkronisasi" : "Belum tersinkronisasi"}
+              </Text>
+            </View>
           </View>
 
           {/* Actions */}
           <View style={styles.actionRow}>
             <Pressable style={styles.btnOutline} onPress={handleSave}>
-              <Text style={styles.btnOutlineText}>Simpan</Text>
+              <Text style={styles.btnOutlineText}>Simpan ke Galeri</Text>
             </Pressable>
             <Pressable style={styles.btnPrimary} onPress={handleShare}>
               <Text style={styles.btnPrimaryText}>Bagikan</Text>
@@ -193,220 +270,89 @@ export default function ResultScreen() {
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: Colors.white,
-  },
+  container: { flex: 1, backgroundColor: Colors.white },
   navBar: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    paddingHorizontal: Spacing.lg,
-    paddingVertical: Spacing.sm,
-    borderBottomWidth: 0.5,
-    borderBottomColor: Colors.gray200,
+    flexDirection: "row", alignItems: "center", justifyContent: "space-between",
+    paddingHorizontal: Spacing.lg, paddingVertical: Spacing.sm,
+    borderBottomWidth: 0.5, borderBottomColor: Colors.gray200,
   },
-  backButton: {
-    width: 32,
-    height: 32,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  navTitle: {
-    fontSize: FontSize.lg,
-    fontWeight: "600",
-    color: Colors.gray900,
-  },
+  backButton: { width: 32, height: 32, alignItems: "center", justifyContent: "center" },
+  navTitle: { fontSize: FontSize.lg, fontWeight: "600", color: Colors.gray900 },
   imagePreview: {
-    height: 220,
-    backgroundColor: "#1e1e1e",
-    alignItems: "center",
-    justifyContent: "center",
-    overflow: "hidden",
-    position: "relative",
+    height: 220, backgroundColor: "#1e1e1e",
+    alignItems: "center", justifyContent: "center",
+    overflow: "hidden", position: "relative",
   },
-  photoImage: {
-    width: "100%",
-    height: "100%",
-    position: "absolute",
-  },
+  photoImage: { width: "100%", height: "100%", position: "absolute" },
   gradcamLabel: {
-    position: "absolute",
-    bottom: 10,
-    alignSelf: "center",
-    backgroundColor: "rgba(0,0,0,0.55)",
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-    borderRadius: Radius.full,
+    position: "absolute", bottom: 10, alignSelf: "center",
+    backgroundColor: "rgba(0,0,0,0.55)", paddingHorizontal: 10,
+    paddingVertical: 4, borderRadius: Radius.full,
   },
-  gradcamLabelText: {
-    color: Colors.white,
-    fontSize: FontSize.xs,
-    fontWeight: "600",
-  },
+  gradcamLabelText: { color: Colors.white, fontSize: FontSize.xs, fontWeight: "600" },
   imagePlaceholderText: {
-    color: "rgba(255,255,255,0.35)",
-    fontSize: FontSize.sm,
-    marginTop: 40,
+    color: "rgba(255,255,255,0.35)", fontSize: FontSize.sm, marginTop: 40,
   },
   gradcamBlobOuter: {
-    position: "absolute",
-    width: 140,
-    height: 110,
-    borderRadius: 70,
-    backgroundColor: "rgba(255,60,0,0.28)",
-    left: "30%",
-    top: "25%",
+    position: "absolute", width: 140, height: 110, borderRadius: 70,
+    backgroundColor: "rgba(255,60,0,0.28)", left: "30%", top: "25%",
   },
   gradcamBlobInner: {
-    position: "absolute",
-    width: 70,
-    height: 55,
-    borderRadius: 35,
-    backgroundColor: "rgba(255,210,0,0.4)",
-    left: "38%",
-    top: "32%",
+    position: "absolute", width: 70, height: 55, borderRadius: 35,
+    backgroundColor: "rgba(255,210,0,0.4)", left: "38%", top: "32%",
   },
-  content: {
-    padding: Spacing.xl,
-  },
-  resultCard: {
-    borderRadius: Radius.md,
-    padding: Spacing.lg,
-    marginBottom: Spacing.lg,
-  },
-  resultHeaderRow: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-  },
-  resultName: {
-    fontSize: FontSize.xl,
-    fontWeight: "700",
-  },
+  content: { padding: Spacing.xl },
+  resultCard: { borderRadius: Radius.md, padding: Spacing.lg, marginBottom: Spacing.lg },
+  resultHeaderRow: { flexDirection: "row", justifyContent: "space-between" },
+  resultName: { fontSize: FontSize.xl, fontWeight: "700" },
   resultScientific: {
-    fontSize: FontSize.xs,
-    color: Colors.gray600,
-    fontStyle: "italic",
-    marginTop: 2,
+    fontSize: FontSize.xs, color: Colors.gray600, fontStyle: "italic", marginTop: 2,
   },
-  resultMeta: {
-    fontSize: FontSize.xs,
-    color: Colors.gray500,
-    marginTop: 6,
-  },
-  confidenceBox: {
-    alignItems: "flex-end",
-  },
-  confidenceValue: {
-    fontSize: FontSize.xxl,
-    fontWeight: "700",
-  },
-  confidenceLabel: {
-    fontSize: FontSize.xs,
-    color: Colors.gray500,
-  },
+  resultMeta: { fontSize: FontSize.xs, color: Colors.gray500, marginTop: 6 },
+  confidenceBox: { alignItems: "flex-end" },
+  confidenceValue: { fontSize: FontSize.xxl, fontWeight: "700" },
+  confidenceLabel: { fontSize: FontSize.xs, color: Colors.gray500 },
   severityRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: Spacing.xs,
-    marginTop: Spacing.md,
-    paddingTop: Spacing.md,
-    borderTopWidth: 0.5,
-    borderTopColor: "rgba(0,0,0,0.08)",
+    flexDirection: "row", alignItems: "center", gap: Spacing.xs,
+    marginTop: Spacing.md, paddingTop: Spacing.md,
+    borderTopWidth: 0.5, borderTopColor: "rgba(0,0,0,0.08)",
   },
-  severityLabel: {
-    fontSize: FontSize.xs,
-    color: Colors.gray600,
-  },
-  pipsRow: {
-    flexDirection: "row",
-    gap: 3,
-  },
-  pip: {
-    width: 18,
-    height: 6,
-    borderRadius: 3,
-  },
-  severityText: {
-    fontSize: FontSize.xs,
-    fontWeight: "700",
-  },
+  severityLabel: { fontSize: FontSize.xs, color: Colors.gray600 },
+  pipsRow: { flexDirection: "row", gap: 3 },
+  pip: { width: 18, height: 6, borderRadius: 3 },
+  severityText: { fontSize: FontSize.xs, fontWeight: "700" },
   sectionLabel: {
-    fontSize: FontSize.sm,
-    fontWeight: "700",
-    color: Colors.gray900,
-    marginBottom: Spacing.sm,
+    fontSize: FontSize.sm, fontWeight: "700",
+    color: Colors.gray900, marginBottom: Spacing.sm,
   },
   recommendationBox: {
-    backgroundColor: "#FFF8E1",
-    borderRadius: Radius.sm,
-    padding: Spacing.md,
-    marginBottom: Spacing.lg,
-    gap: 6,
+    backgroundColor: "#FFF8E1", borderRadius: Radius.sm,
+    padding: Spacing.md, marginBottom: Spacing.lg, gap: 6,
   },
-  recommendationLine: {
-    fontSize: FontSize.sm,
-    color: Colors.gray800,
-    lineHeight: 20,
+  recommendationLine: { fontSize: FontSize.sm, color: Colors.gray800, lineHeight: 20 },
+  metaCard: {
+    backgroundColor: Colors.gray50, borderRadius: Radius.md,
+    padding: Spacing.lg, marginBottom: Spacing.lg,
   },
-  metaRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 6,
-    marginBottom: Spacing.xl,
+  metaItem: {
+    flexDirection: "row", alignItems: "flex-start",
+    gap: Spacing.sm, paddingVertical: Spacing.xs,
   },
-  metaText: {
-    fontSize: FontSize.xs,
-    color: Colors.gray500,
-  },
-  metaDivider: {
-    width: 1,
-    height: 12,
-    backgroundColor: Colors.gray300,
-    marginHorizontal: 4,
-  },
-  actionRow: {
-    flexDirection: "row",
-    gap: Spacing.sm,
-  },
+  metaLabel: { fontSize: FontSize.xs, color: Colors.gray500, width: 100 },
+  metaValue: { fontSize: FontSize.xs, color: Colors.gray800, fontWeight: "500", flex: 1 },
+  metaDividerLine: { height: 0.5, backgroundColor: Colors.gray200, marginVertical: 2 },
+  actionRow: { flexDirection: "row", gap: Spacing.sm },
   btnOutline: {
-    flex: 1,
-    paddingVertical: Spacing.md,
-    borderRadius: Radius.sm,
-    borderWidth: 1,
-    borderColor: Colors.gray300,
-    alignItems: "center",
+    flex: 1, paddingVertical: Spacing.md, borderRadius: Radius.sm,
+    borderWidth: 1, borderColor: Colors.gray300, alignItems: "center",
   },
-  btnOutlineText: {
-    fontSize: FontSize.sm,
-    fontWeight: "600",
-    color: Colors.gray700,
-  },
+  btnOutlineText: { fontSize: FontSize.sm, fontWeight: "600", color: Colors.gray700 },
   btnPrimary: {
-    flex: 1,
-    paddingVertical: Spacing.md,
-    borderRadius: Radius.sm,
-    backgroundColor: Colors.greenMain,
-    alignItems: "center",
+    flex: 1, paddingVertical: Spacing.md,
+    borderRadius: Radius.sm, backgroundColor: Colors.greenMain, alignItems: "center",
   },
-  btnPrimaryText: {
-    fontSize: FontSize.sm,
-    fontWeight: "700",
-    color: Colors.white,
-  },
-  emptyState: {
-    flex: 1,
-    alignItems: "center",
-    justifyContent: "center",
-    gap: Spacing.sm,
-  },
-  emptyText: {
-    fontSize: FontSize.md,
-    color: Colors.gray600,
-  },
-  backLink: {
-    fontSize: FontSize.md,
-    color: Colors.greenMain,
-    fontWeight: "600",
-  },
+  btnPrimaryText: { fontSize: FontSize.sm, fontWeight: "700", color: Colors.white },
+  emptyState: { flex: 1, alignItems: "center", justifyContent: "center", gap: Spacing.sm },
+  emptyText: { fontSize: FontSize.md, color: Colors.gray600 },
+  backLink: { fontSize: FontSize.md, color: Colors.greenMain, fontWeight: "600" },
 });
