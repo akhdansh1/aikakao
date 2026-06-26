@@ -1,11 +1,12 @@
-import React from "react";
-import { View, Text, StyleSheet, ScrollView, Pressable, Alert, Image } from "react-native";
+import React, { useState } from "react";
+import { View, Text, StyleSheet, ScrollView, Pressable, Alert, Image, Share, Platform } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { router } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { Colors, Severity } from "@/constants/Colors";
 import { FontSize, Radius, Spacing } from "@/constants/Theme";
 import { useInspectionStore } from "@/store/useInspectionStore";
+import { useScanStore } from "@/store/useScanStore";
 import { formatRelativeTimestamp } from "@/utils/time";
 
 const ORGAN_LABEL: Record<string, string> = {
@@ -16,6 +17,17 @@ const ORGAN_LABEL: Record<string, string> = {
 
 export default function ResultScreen() {
   const inspection = useInspectionStore((s) => s.selectedInspection);
+  const [isSaving, setIsSaving] = useState(false);
+  const [isSharing, setIsSharing] = useState(false);
+  const [toast, setToast] = useState<{
+    visible: boolean;
+    message: string;
+    type: "success" | "info";
+  }>({
+    visible: false,
+    message: "",
+    type: "success",
+  });
 
   if (!inspection) {
     return (
@@ -31,16 +43,120 @@ export default function ResultScreen() {
   const isHealthy = inspection.status === "sehat";
   const severityConfig = inspection.severity ? Severity[inspection.severity] : null;
 
+  // Fungsi pembantu menampilkan Toast UI kustom lalu kembali ke kamera
+  const triggerToast = (message: string, type: "success" | "info" = "success") => {
+    setToast({
+      visible: true,
+      message,
+      type,
+    });
+
+    // Reset scan state agar siklus pemilihan kode pohon dimulai dari awal
+    useScanStore.getState().resetScan();
+
+    // Otomatis arahkan kembali ke Kamera setelah 1.8 detik agar pengguna bisa lanjut tugas lain
+    setTimeout(() => {
+      setToast((prev) => ({ ...prev, visible: false }));
+      router.replace("/(tabs)/kamera");
+    }, 1800);
+  };
+
   const handleSave = () => {
-    Alert.alert("Tersimpan", `Hasil inspeksi ${inspection.blockId} telah disimpan.`);
+    if (isSaving || isSharing) return;
+    setIsSaving(true);
+
+    // Dummy loading 1.2s sebelum menyimpan & menampilkan Toast
+    setTimeout(() => {
+      setIsSaving(false);
+      triggerToast("Diagnosis berhasil disimpan ke riwayat!");
+    }, 1200);
   };
 
   const handleShare = () => {
-    Alert.alert("Bagikan", "Fitur bagikan akan terhubung ke sistem sharing perangkat.");
+    if (isSaving || isSharing) return;
+    setIsSharing(true);
+
+    // Dummy loading 1.2s sebelum memicu share sheet & Toast
+    setTimeout(async () => {
+      setIsSharing(false);
+
+      const severityLabel = severityConfig ? severityConfig.label : "Sehat";
+      const statusText = isHealthy ? "Sehat" : `Terdeteksi ${inspection.disease}`;
+      const message = `[Diagnosis Kesehatan Cokelat - AI Kakao]
+-------------------------------------------
+Kode Pohon : ${inspection.blockId}
+Organ      : ${ORGAN_LABEL[inspection.organ] || inspection.organ}
+Status     : ${statusText}
+Confidence : ${inspection.confidence.toFixed(1)}%
+Keparahan  : ${severityLabel}
+
+Rekomendasi Tindakan:
+${inspection.recommendation.map((rec, idx) => `${idx + 1}. ${rec}`).join("\n")}
+
+Diperiksa pada: ${formatRelativeTimestamp(new Date(inspection.date))}
+-------------------------------------------
+Pindai kondisi kebun kakao secara cerdas menggunakan aplikasi AI Kakao.`;
+
+      if (Platform.OS === "web") {
+        const webNav = typeof navigator !== "undefined" ? (navigator as any) : null;
+        if (webNav && webNav.share) {
+          try {
+            await webNav.share({
+              title: `Diagnosis Pohon Kakao ${inspection.blockId}`,
+              text: message,
+            });
+          } catch (err) {
+            console.log("Web share cancelled:", err);
+          }
+        } else if (webNav && webNav.clipboard) {
+          try {
+            await webNav.clipboard.writeText(message);
+          } catch (err) {
+            console.warn("Gagal menyalin teks:", err);
+          }
+        }
+      } else {
+        try {
+          await Share.share({
+            message,
+            title: `Diagnosis Pohon Kakao ${inspection.blockId}`,
+          });
+        } catch (error: any) {
+          console.warn("Gagal membagikan:", error);
+        }
+      }
+
+      // Tampilkan Toast sukses tanpa memblokir dengan dialog konfirmasi
+      const hasWebShare = typeof navigator !== "undefined" && !!(navigator as any).share;
+      triggerToast(
+        Platform.OS === "web" && !hasWebShare
+          ? "Diagnosis disalin ke clipboard!"
+          : "Diagnosis berhasil dibagikan!"
+      );
+    }, 1200);
   };
 
   return (
     <SafeAreaView style={styles.container} edges={["top", "bottom"]}>
+      {/* Toast Notifikasi Kustom (Premium & Non-blocking) */}
+      {toast.visible && (
+        <View style={styles.toastContainer}>
+          <View
+            style={[
+              styles.toastContent,
+              toast.type === "success" ? styles.toastSuccess : styles.toastInfo,
+            ]}
+          >
+            <Ionicons
+              name={toast.type === "success" ? "checkmark-circle" : "information-circle"}
+              size={18}
+              color={Colors.white}
+            />
+            <Text style={styles.toastText}>{toast.message}</Text>
+          </View>
+        </View>
+      )}
+
       {/* Top nav */}
       <View style={styles.navBar}>
         <Pressable onPress={() => router.back()} style={styles.backButton}>
@@ -179,11 +295,23 @@ export default function ResultScreen() {
 
           {/* Actions */}
           <View style={styles.actionRow}>
-            <Pressable style={styles.btnOutline} onPress={handleSave}>
-              <Text style={styles.btnOutlineText}>Simpan</Text>
+            <Pressable
+              style={[styles.btnOutline, (isSaving || isSharing) && { opacity: 0.6 }]}
+              onPress={handleSave}
+              disabled={isSaving || isSharing}
+            >
+              <Text style={styles.btnOutlineText}>
+                {isSaving ? "Menyimpan..." : "Simpan"}
+              </Text>
             </Pressable>
-            <Pressable style={styles.btnPrimary} onPress={handleShare}>
-              <Text style={styles.btnPrimaryText}>Bagikan</Text>
+            <Pressable
+              style={[styles.btnPrimary, (isSaving || isSharing) && { opacity: 0.6 }]}
+              onPress={handleShare}
+              disabled={isSaving || isSharing}
+            >
+              <Text style={styles.btnPrimaryText}>
+                {isSharing ? "Membagikan..." : "Bagikan"}
+              </Text>
             </Pressable>
           </View>
         </View>
@@ -407,6 +535,40 @@ const styles = StyleSheet.create({
   backLink: {
     fontSize: FontSize.md,
     color: Colors.greenMain,
+    fontWeight: "600",
+  },
+  // --- Toast UI Styles ---
+  toastContainer: {
+    position: "absolute",
+    top: 50,
+    left: 0,
+    right: 0,
+    alignItems: "center",
+    zIndex: 9999,
+    paddingHorizontal: Spacing.xl,
+  },
+  toastContent: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    paddingVertical: 10,
+    paddingHorizontal: 18,
+    borderRadius: Radius.full,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.15,
+    shadowRadius: 8,
+    elevation: 5,
+  },
+  toastSuccess: {
+    backgroundColor: "rgba(46, 125, 50, 0.95)",
+  },
+  toastInfo: {
+    backgroundColor: "rgba(25, 118, 210, 0.95)",
+  },
+  toastText: {
+    color: Colors.white,
+    fontSize: FontSize.sm,
     fontWeight: "600",
   },
 });

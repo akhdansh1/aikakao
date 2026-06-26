@@ -1,4 +1,4 @@
-import React, { useRef, useState } from "react";
+import React, { useRef, useState, useCallback } from "react";
 import { View, Text, StyleSheet, Pressable } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { CameraView, CameraType, useCameraPermissions } from "expo-camera";
@@ -11,7 +11,9 @@ import { useScanStore } from "@/store/useScanStore";
 import { useInspectionStore } from "@/store/useInspectionStore";
 import { useSyncQueueStore } from "@/store/useSyncQueueStore";
 import { SyncStatusBanner } from "@/components/SyncStatusBanner";
+import { TreeSearchModal } from "@/components/TreeSearchModal";
 import { OrganType, Inspection, DISEASE_OPTIONS } from "@/mocks/inspections";
+import { TreeEntry, TREE_REGISTRY } from "@/mocks/treeRegistry";
 import { formatRelativeTimestamp } from "@/utils/time";
 
 const ORGANS: { key: OrganType; label: string }[] = [
@@ -24,9 +26,12 @@ export default function KameraScreen() {
   const [permission, requestPermission] = useCameraPermissions();
   const [facing] = useState<CameraType>("back");
   const cameraRef = useRef<CameraView>(null);
+  const [showTreeSearch, setShowTreeSearch] = useState(false);
 
   const selectedOrgan = useScanStore((s) => s.selectedOrgan);
   const setSelectedOrgan = useScanStore((s) => s.setSelectedOrgan);
+  const selectedTreeCode = useScanStore((s) => s.selectedTreeCode);
+  const setSelectedTreeCode = useScanStore((s) => s.setSelectedTreeCode);
   const isAnalyzing = useScanStore((s) => s.isAnalyzing);
   const setIsAnalyzing = useScanStore((s) => s.setIsAnalyzing);
 
@@ -35,6 +40,14 @@ export default function KameraScreen() {
 
   const isConnected = useSyncQueueStore((s) => s.isConnected);
   const enqueueSync = useSyncQueueStore((s) => s.enqueue);
+
+  const handleTreeSelect = useCallback(
+    (tree: TreeEntry) => {
+      setSelectedTreeCode(tree.treeCode);
+      setShowTreeSearch(false);
+    },
+    [setSelectedTreeCode]
+  );
 
   // Permission belum diberikan
   if (!permission) {
@@ -56,6 +69,40 @@ export default function KameraScreen() {
     );
   }
 
+  // --- STEP 1: Belum pilih pohon → tampil layar pemilihan ---
+  if (!selectedTreeCode) {
+    return (
+      <SafeAreaView style={styles.selectTreeContainer} edges={["top", "bottom"]}>
+        <View style={styles.selectTreeContent}>
+          <View style={styles.selectTreeIconWrap}>
+            <Ionicons name="leaf" size={48} color={Colors.greenMain} />
+          </View>
+          <Text style={styles.selectTreeTitle}>Pilih Pohon Terlebih Dahulu</Text>
+          <Text style={styles.selectTreeDesc}>
+            Cari dan pilih kode pohon yang akan diperiksa sebelum mengambil foto.
+          </Text>
+          <Pressable
+            style={styles.selectTreeButton}
+            onPress={() => setShowTreeSearch(true)}
+          >
+            <Ionicons name="search" size={18} color={Colors.white} />
+            <Text style={styles.selectTreeButtonText}>Cari Kode Pohon</Text>
+          </Pressable>
+          <Text style={styles.selectTreeHint}>
+            {TREE_REGISTRY.length} pohon terdaftar di 4 blok
+          </Text>
+        </View>
+
+        <TreeSearchModal
+          visible={showTreeSearch}
+          onClose={() => setShowTreeSearch(false)}
+          onSelect={handleTreeSelect}
+        />
+      </SafeAreaView>
+    );
+  }
+
+  // --- STEP 2: Pohon sudah dipilih → tampil kamera ---
   const handleCapture = async () => {
     if (isAnalyzing) return;
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
@@ -77,7 +124,12 @@ export default function KameraScreen() {
       // prinsip "Mode Offline dengan Auto-Sync": citra & metadata
       // disimpan dahulu, lalu disinkronkan begitu koneksi tersedia.
       setTimeout(async () => {
-        const mockResult = generateMockResult(selectedOrgan, isConnected, photoUri);
+        const mockResult = generateMockResult(
+          selectedOrgan,
+          selectedTreeCode,
+          isConnected,
+          photoUri
+        );
         addInspection(mockResult);
         selectInspection(mockResult);
 
@@ -94,11 +146,15 @@ export default function KameraScreen() {
     }
   };
 
+  const handleChangeTree = () => {
+    setSelectedTreeCode(null);
+  };
+
   return (
     <View style={styles.container}>
       <CameraView ref={cameraRef} style={styles.camera} facing={facing}>
         <SafeAreaView style={styles.overlaySafeArea} edges={["top"]}>
-          {/* Status row: posisi framing + indikator koneksi */}
+          {/* Status row: posisi framing + kode pohon terpilih */}
           <View style={styles.topStatusRow}>
             <View style={styles.statusBadge}>
               <View style={styles.statusDot} />
@@ -111,6 +167,13 @@ export default function KameraScreen() {
               </View>
             )}
           </View>
+
+          {/* Badge kode pohon terpilih */}
+          <Pressable style={styles.treeBadge} onPress={handleChangeTree}>
+            <Ionicons name="leaf" size={13} color={Colors.greenMain} />
+            <Text style={styles.treeBadgeText}>{selectedTreeCode}</Text>
+            <Ionicons name="swap-horizontal" size={13} color={Colors.gray500} />
+          </Pressable>
 
           {/* Guided framing box */}
           <View style={styles.framingWrap}>
@@ -173,23 +236,24 @@ export default function KameraScreen() {
 /**
  * Mock diagnosis generator — menghasilkan hasil acak yang realistis
  * sesuai organ yang dipilih, untuk simulasi sebelum backend ML tersedia.
+ * Sekarang menggunakan kode pohon yang dipilih user, bukan random.
  */
 function generateMockResult(
   organ: OrganType,
+  treeCode: string,
   isConnected: boolean,
   photoUri?: string
 ): Inspection {
   const isHealthy = Math.random() > 0.45;
   const now = new Date();
   const id = `insp-${Date.now()}`;
-  const blockId = `BLK-${["A", "B", "C", "D"][Math.floor(Math.random() * 4)]}${Math.floor(
-    Math.random() * 9
-  )}-${String(Math.floor(Math.random() * 99)).padStart(3, "0")}`;
+  // Ambil blok dari treeCode (karakter ke-4)
+  const blockLetter = treeCode.charAt(4) as "A" | "B" | "C" | "D";
 
   if (isHealthy) {
     return {
       id,
-      blockId,
+      blockId: treeCode,
       disease: null,
       scientificName: null,
       confidence: Math.round((92 + Math.random() * 7) * 10) / 10,
@@ -201,7 +265,7 @@ function generateMockResult(
       date: now.toISOString(),
       latitude: -2.1547 + (Math.random() - 0.5) * 0.01,
       longitude: 117.3821 + (Math.random() - 0.5) * 0.01,
-      block: "A",
+      block: blockLetter,
       synced: isConnected,
       photoUri,
     };
@@ -215,7 +279,7 @@ function generateMockResult(
 
   return {
     id,
-    blockId,
+    blockId: treeCode,
     disease: disease.name,
     scientificName: disease.scientificName,
     confidence,
@@ -238,7 +302,7 @@ function generateMockResult(
     date: now.toISOString(),
     latitude: -2.1547 + (Math.random() - 0.5) * 0.01,
     longitude: 117.3821 + (Math.random() - 0.5) * 0.01,
-    block: "A",
+    block: blockLetter,
     synced: isConnected,
     photoUri,
   };
@@ -295,6 +359,21 @@ const styles = StyleSheet.create({
     color: Colors.white,
     fontSize: FontSize.sm,
     fontWeight: "600",
+  },
+  treeBadge: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    backgroundColor: "rgba(255,255,255,0.92)",
+    paddingHorizontal: Spacing.md,
+    paddingVertical: 6,
+    borderRadius: Radius.full,
+    marginTop: Spacing.sm,
+  },
+  treeBadgeText: {
+    fontSize: FontSize.sm,
+    fontWeight: "700",
+    color: Colors.gray900,
   },
   framingWrap: {
     flex: 1,
@@ -423,5 +502,60 @@ const styles = StyleSheet.create({
     color: Colors.white,
     fontWeight: "700",
     fontSize: FontSize.md,
+  },
+  // --- Select Tree Step styles ---
+  selectTreeContainer: {
+    flex: 1,
+    backgroundColor: Colors.white,
+  },
+  selectTreeContent: {
+    flex: 1,
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: Spacing.xxxl,
+  },
+  selectTreeIconWrap: {
+    width: 88,
+    height: 88,
+    borderRadius: 44,
+    backgroundColor: Colors.greenLight,
+    alignItems: "center",
+    justifyContent: "center",
+    marginBottom: Spacing.xl,
+  },
+  selectTreeTitle: {
+    fontSize: FontSize.xl,
+    fontWeight: "700",
+    color: Colors.gray900,
+    textAlign: "center",
+    marginBottom: Spacing.sm,
+  },
+  selectTreeDesc: {
+    fontSize: FontSize.sm,
+    color: Colors.gray600,
+    textAlign: "center",
+    lineHeight: 20,
+    marginBottom: Spacing.xxl,
+  },
+  selectTreeButton: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: Spacing.sm,
+    backgroundColor: Colors.greenMain,
+    paddingHorizontal: Spacing.xxl,
+    paddingVertical: 14,
+    borderRadius: Radius.md,
+    width: "100%",
+  },
+  selectTreeButtonText: {
+    color: Colors.white,
+    fontSize: FontSize.md,
+    fontWeight: "700",
+  },
+  selectTreeHint: {
+    fontSize: FontSize.xs,
+    color: Colors.gray400,
+    marginTop: Spacing.md,
   },
 });
